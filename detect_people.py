@@ -180,13 +180,12 @@ class DemoPersonCounter:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                elif key == ord(' '):  # Pause avec espace
-                    cv2.waitKey(0)
+                elif key == ord(' '):  
                     
         except KeyboardInterrupt:
             print("\n⏹️ Arrêt demandé par l'utilisateur")
         except Exception as e:
-            print(f"❌ Erreur: {e}")
+            print(f"❌ Erreur:  {e}")
         finally:
             cap.release()
             cv2.destroyAllWindows()
@@ -205,7 +204,7 @@ def main():
     demo_sources = {
         "1": {
             "source": 0,  # Webcam par défaut
-            "name": "Webcam locale"
+            "name": "Webcam localee"
         },
         "2": {
             "source": "https://sample-videos.com/zip/10/mp4/720/SampleVideo_720x480_1mb.mp4",
