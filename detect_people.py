@@ -51,7 +51,6 @@ class DemoPersonCounter:
         """
         print(f"Connexion à la source: {source}")
         
-        # Si c'est une URL YouTube
         if 'youtube.com' in str(source) or 'youtu.be' in str(source):
             stream_url = self.get_youtube_stream_url(source)
             if stream_url:
@@ -59,17 +58,13 @@ class DemoPersonCounter:
             else:
                 return None
         
-        # Connexion avec OpenCV
         cap = cv2.VideoCapture(source)
         
-        # Configuration avancée
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
-        # Test de lecture
         ret, frame = cap.read()
         if ret and frame is not None:
             print("✅ Connexion établie avec succès!")
-            # Remettre la frame dans le buffer
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             return cap
         else:
@@ -265,7 +260,6 @@ def main():
         else:
             print("❌ Choix invalide!")
         
-        # Reset du compteur pour la prochaine session
         counter.frame_count = 0
 
 if __name__ == "__main__":
