@@ -4,263 +4,204 @@ from ultralytics import YOLO
 import time
 import yt_dlp
 import os
+import logging
+from typing import Tuple, Optional, Union
+
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO
+)
 
 class DemoPersonCounter:
-    def __init__(self, model_path='yolov8n.pt'):
+    def __init__(self, model_path: str = "yolov8n.pt", max_width: int = 1280, skip_frames: int = 0):
         """
-        Initialise le compteur de personnes pour demo
+        Initialise le compteur de personnes pour demo.
         
         Args:
             model_path (str): Chemin vers le modèle YOLO
+            max_width (int): Largeur max des frames pour optimisation
+            skip_frames (int): Nombre de frames à ignorer entre deux détections
         """
         self.model = YOLO(model_path)
         self.person_count = 0
         self.frame_count = 0
-        
-        # Configuration pour l'affichage
+        self.max_width = max_width
+        self.skip_frames = skip_frames
+
+        # Style overlay
         self.font = cv2.FONT_HERSHEY_SIMPLEX
-        self.font_scale = 0.8
-        self.color = (0, 255, 0)  # Vert
+        self.font_scale = 0.6
+        self.color = (0, 255, 0)
         self.thickness = 2
-        
-    def get_youtube_stream_url(self, youtube_url):
+
+    def get_youtube_stream_url(self, youtube_url: str) -> Optional[str]:
         """Extrait l'URL de streaming directe depuis YouTube"""
         try:
             ydl_opts = {
-                'format': 'best[height<=720]',  # Qualité raisonnable
-                'quiet': True,
-                'no_warnings': True,
+                "format": "best[height<=720]",
+                "quiet": True,
+                "no_warnings": True,
             }
-            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(youtube_url, download=False)
-                stream_url = info['url']
-                print(f"✅ URL de streaming extraite: {stream_url[:100]}...")
-                return stream_url
-                
+                return info["url"]
         except Exception as e:
-            print(f"❌ Erreur lors de l'extraction YouTube: {e}")
+            logging.error(f"Erreur extraction YouTube: {e}")
             return None
-    
-    def connect_to_source(self, source):
+
+    def connect_to_source(self, source: Union[str, int]) -> Optional[cv2.VideoCapture]:
         """
-        Établit la connexion à différents types de sources
-        
-        Args:
-            source: Peut être une URL, un fichier vidéo, ou un numéro de webcam
+        Établit la connexion à une source vidéo.
         """
-        print(f"Connexion à la source: {source}")
-        
-        if 'youtube.com' in str(source) or 'youtu.be' in str(source):
+        logging.info(f"Tentative de connexion à la source: {source}")
+
+        if "youtube.com" in str(source) or "youtu.be" in str(source):
             stream_url = self.get_youtube_stream_url(source)
-            if stream_url:
-                source = stream_url
-            else:
+            if not stream_url:
                 return None
-        
+            source = stream_url
+
         cap = cv2.VideoCapture(source)
-        
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        
-        ret, frame = cap.read()
-        if ret and frame is not None:
-            print("✅ Connexion établie avec succès!")
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        if cap.isOpened():
+            logging.info("✅ Connexion établie avec succès")
             return cap
-        else:
-            cap.release()
-            print("❌ Impossible de lire depuis cette source")
-            return None
-        
-    def detect_persons(self, frame):
+        logging.error("❌ Impossible de lire depuis cette source")
+        return None
+
+    def detect_persons(self, frame: np.ndarray) -> Tuple[int, np.ndarray]:
         """
-        Détecte les personnes dans une frame
-        
-        Args:
-            frame: Image à analyser
-            
-        Returns:
-            tuple: (nombre de personnes, frame annotée)
+        Détecte les personnes dans une frame.
         """
-        # Exécution de la détection YOLO
         results = self.model(frame, verbose=False)
-        
         person_count = 0
         annotated_frame = frame.copy()
-        
-        # Parcourir les résultats de détection
+
         for result in results:
-            boxes = result.boxes
-            if boxes is not None:
-                for box in boxes:
-                    # Vérifier si c'est une personne (classe 0 dans COCO)
-                    if int(box.cls[0]) == 0:  # 0 = personne
-                        person_count += 1
-                        
-                        # Obtenir les coordonnées de la boîte
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                        confidence = box.conf[0].cpu().numpy()
-                        
-                        # Dessiner la boîte englobante
-                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), self.color, self.thickness)
-                        
-                        # Ajouter le texte de confiance
-                        label = f'Personne {confidence:.2f}'
-                        cv2.putText(annotated_frame, label, (x1, y1-10), 
-                                  self.font, 0.5, self.color, 1)
-        
+            for box in result.boxes:
+                if int(box.cls[0]) == 0:  # 0 = personne (COCO)
+                    person_count += 1
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                    conf = float(box.conf[0].cpu().numpy())
+                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), self.color, self.thickness)
+                    cv2.putText(
+                        annotated_frame,
+                        f"Personne {conf:.2f}",
+                        (x1, y1 - 10),
+                        self.font,
+                        self.font_scale,
+                        self.color,
+                        1,
+                    )
         return person_count, annotated_frame
-    
-    def add_info_overlay(self, frame, person_count, source_info="Demo"):
-        """Ajoute les informations sur l'image"""
-        height, width = frame.shape[:2]
-        
-        # Fond semi-transparent pour le texte
+
+    def add_info_overlay(self, frame: np.ndarray, person_count: int, source_info: str = "Demo") -> None:
+        """Ajoute un overlay d'informations sur la frame."""
         overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (500, 140), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, 10), (450, 130), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
-        
-        # Informations à afficher
+
         info_text = [
             f"Source: {source_info}",
             f"Personnes detectees: {person_count}",
             f"Frame: {self.frame_count}",
             f"Timestamp: {time.strftime('%H:%M:%S')}",
-            "Appuyez sur 'q' pour quitter"
+            "Appuyez sur 'q' pour quitter",
         ]
-        
-        # Afficher chaque ligne d'information
+
         for i, text in enumerate(info_text):
-            y_position = 30 + (i * 22)
-            cv2.putText(frame, text, (15, y_position), 
-                       self.font, 0.5, (255, 255, 255), 2)
-    
-    def run_demo(self, source, source_name="Demo"):
-        """Lance la détection en temps réel"""
+            cv2.putText(frame, text, (15, 30 + i * 22), self.font, 0.5, (255, 255, 255), 1)
+
+    def run_demo(self, source: Union[str, int], source_name: str = "Demo") -> bool:
+        """Exécute la détection en temps réel depuis une source vidéo."""
         cap = self.connect_to_source(source)
-        if cap is None:
+        if not cap:
             return False
-            
-        print(f"🚀 Démarrage de la détection sur {source_name}...")
-        print("Appuyez sur 'q' pour quitter")
-        
+
+        logging.info(f"🚀 Démarrage détection sur {source_name}")
         try:
             while True:
                 ret, frame = cap.read()
                 if not ret:
-                    print("⚠️ Fin de la source ou erreur de lecture")
+                    logging.warning("⚠️ Fin de la source ou erreur de lecture")
                     break
-                
+
                 self.frame_count += 1
-                
-                # Redimensionner pour de meilleures performances
-                height, width = frame.shape[:2]
-                if width > 1280:
-                    scale = 1280 / width
-                    new_width = 1280
-                    new_height = int(height * scale)
-                    frame = cv2.resize(frame, (new_width, new_height))
-                
-                # Détecter les personnes
+
+                # Redimensionnement
+                h, w = frame.shape[:2]
+                if w > self.max_width:
+                    scale = self.max_width / w
+                    frame = cv2.resize(frame, (self.max_width, int(h * scale)))
+
+                # Skip frames si configuré
+                if self.skip_frames and self.frame_count % (self.skip_frames + 1) != 0:
+                    continue
+
+                # Détection
                 person_count, annotated_frame = self.detect_persons(frame)
                 self.person_count = person_count
-                
-                # Ajouter les informations sur l'image
+
+                # Overlay
                 self.add_info_overlay(annotated_frame, person_count, source_name)
-                
-                # Afficher le résultat
-                cv2.imshow('Demo - Compteur de Personnes', annotated_frame)
-                
-                # Contrôles
+                cv2.imshow("Demo - Compteur de Personnes", annotated_frame)
+
                 key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
+                if key == ord("q"):
                     break
-                elif key == ord(' '):  
-                    
+
         except KeyboardInterrupt:
-            print("\n⏹️ Arrêt demandé par l'utilisateur")
+            logging.info("⏹️ Arrêt demandé par l'utilisateur")
         except Exception as e:
-            print(f"❌ Erreur:  {e}")
+            logging.error(f"Erreur pendant la détection: {e}")
         finally:
             cap.release()
             cv2.destroyAllWindows()
-            print("🧹 Ressources libérées")
-            return True
+            logging.info("🧹 Ressources libérées")
+        return True
+
 
 def main():
-    """Menu principal pour choisir la source"""
+    """Menu principal"""
     counter = DemoPersonCounter()
-    
-    print("="*60)
-    print("🎥 DEMO - COMPTEUR DE PERSONNES AVEC YOLO")
-    print("="*60)
-    
-    # Sources de démonstration prêtes à utiliser
+
     demo_sources = {
-        "1": {
-            "source": 0,  # Webcam par défaut
-            "name": "Webcam localee"
-        },
-        "2": {
-            "source": "https://sample-videos.com/zip/10/mp4/720/SampleVideo_720x480_1mb.mp4",
-            "name": "Vidéo test en ligne"
-        },
-        "3": {
-            "source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-            "name": "Big Buck Bunny (demo)"
-        },
-        "4": {
-            "source": "https://www.learningcontainer.com/wp-content/uploads/2020/05/sample-mp4-file.mp4",
-            "name": "Vidéo sample MP4"
-        }
+        "1": {"source": 0, "name": "Webcam locale"},
+        "2": {"source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", "name": "Big Buck Bunny"},
+        "3": {"source": "https://www.learningcontainer.com/wp-content/uploads/2020/05/sample-mp4-file.mp4", "name": "Vidéo sample"},
     }
-    
+
     while True:
         print("\n📋 Choisissez une source vidéo:")
-        print("1. 📷 Webcam (caméra locale)")
-        print("2. 🌐 Vidéo test en ligne")
-        print("3. 🎬 Big Buck Bunny (demo)")
-        print("4. 📹 Sample MP4")
-        print("5. 🎞️ Fichier vidéo local")
-        print("6. 📺 YouTube (nécessite yt-dlp)")
-        print("7. 🔗 URL personnalisée")
-        print("8. 📡 Votre flux caméra IP")
+        print("1. 📷 Webcam locale")
+        print("2. 🎬 Big Buck Bunny")
+        print("3. 📹 Vidéo sample")
+        print("4. 📁 Fichier local")
+        print("5. 🔗 YouTube")
+        print("6. 🌐 URL personnalisée")
         print("0. ❌ Quitter")
-        
-        choice = input("\n👉 Votre choix (0-8): ").strip()
-        
+
+        choice = input("\n👉 Votre choix (0-6): ").strip()
         if choice == "0":
-            print("👋 Au revoir!")
             break
-            
         elif choice in demo_sources:
-            source_info = demo_sources[choice]
-            success = counter.run_demo(source_info["source"], source_info["name"])
-            
-        elif choice == "5":
-            file_path = input("📁 Chemin vers le fichier vidéo: ").strip()
-            if os.path.exists(file_path):
-                counter.run_demo(file_path, f"Fichier: {os.path.basename(file_path)}")
+            counter.run_demo(demo_sources[choice]["source"], demo_sources[choice]["name"])
+        elif choice == "4":
+            path = input("📁 Chemin vers le fichier: ").strip()
+            if os.path.exists(path):
+                counter.run_demo(path, os.path.basename(path))
             else:
-                print("❌ Fichier introuvable!")
-                
+                logging.error("Fichier introuvable")
+        elif choice == "5":
+            url = input("🔗 URL YouTube: ").strip()
+            counter.run_demo(url, "YouTube")
         elif choice == "6":
-            youtube_url = input("🔗 URL YouTube: ").strip()
-            print("⚠️ Installation de yt-dlp requise: pip install yt-dlp")
-            counter.run_demo(youtube_url, "YouTube")
-            
-        elif choice == "7":
-            custom_url = input("🔗 URL personnalisée: ").strip()
-            counter.run_demo(custom_url, "URL personnalisée")
-            
-        elif choice == "8":
-            ip_url = input("📡 URL de votre caméra IP (ex: http://192.168.1.100:8080/video): ").strip()
-            counter.run_demo(ip_url, "Caméra IP")
-            
+            url = input("🔗 URL personnalisée: ").strip()
+            counter.run_demo(url, "Custom URL")
         else:
-            print("❌ Choix invalide!")
-        
-        counter.frame_count = 0
+            logging.warning("Choix invalide")
+
 
 if __name__ == "__main__":
     main()
