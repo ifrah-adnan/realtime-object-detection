@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import json
+
 import time
 import yt_dlp
 import os
@@ -113,6 +115,35 @@ class DemoPersonCounter:
         for i, text in enumerate(info_text):
             cv2.putText(frame, text, (15, 30 + i * 22), self.font, 0.5, (255, 255, 255), 1)
 
+    def save_results_to_json(self, person_count: int, source_name: str):
+        """
+        Sauvegarde les résultats de la frame actuelle dans un fichier JSON.
+        Chaque frame sera ajoutée avec timestamp, source et nombre de personnes.
+        """
+        result = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "source": source_name,
+            "frame_number": self.frame_count,
+            "person_count": person_count
+        }
+
+        # Crée un dossier 'results' si non existant
+        os.makedirs("results", exist_ok=True)
+        json_file = "results/detection_results.json"
+
+        # Si le fichier existe, on charge et ajoute le nouveau résultat
+        if os.path.exists(json_file):
+            with open(json_file, "r") as f:
+                data = json.load(f)
+        else:
+            data = []
+
+        data.append(result)
+
+        # Écriture finale
+        with open(json_file, "w") as f:
+            json.dump(data, f, indent=4)
+
     def run_demo(self, source: Union[str, int], source_name: str = "Demo") -> bool:
         """Exécute la détection en temps réel depuis une source vidéo."""
         cap = self.connect_to_source(source)
@@ -142,6 +173,8 @@ class DemoPersonCounter:
                 # Détection
                 person_count, annotated_frame = self.detect_persons(frame)
                 self.person_count = person_count
+                self.save_results_to_json(person_count, source_name)
+
 
                 # Overlay
                 self.add_info_overlay(annotated_frame, person_count, source_name)
